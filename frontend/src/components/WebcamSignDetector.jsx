@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { GestureRecognizer, FilesetResolver } from '@mediapipe/tasks-vision';
+import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { Video, VideoOff, Send } from 'lucide-react';
 
 export default function WebcamSignDetector({ onSignsDetected }) {
@@ -8,24 +8,38 @@ export default function WebcamSignDetector({ onSignsDetected }) {
   const [isRecognizerReady, setIsRecognizerReady] = useState(false);
   const [isWebcamActive, setIsWebcamActive] = useState(false);
   const [detectedSigns, setDetectedSigns] = useState([]);
+  const [isSubmittingCountdown, setIsSubmittingCountdown] = useState(false);
 
   const lastDetectedTimeRef = useRef(0);
   const lastVideoTimeRef = useRef(-1);
   const requestRef = useRef(null);
 
-  // Initialize MediaPipe Gesture Recognizer
+  const detectedSignsRef = useRef([]);
+  const submitTimeoutRef = useRef(null);
+  const onSignsDetectedRef = useRef(onSignsDetected);
+
+  useEffect(() => {
+    onSignsDetectedRef.current = onSignsDetected;
+  }, [onSignsDetected]);
+
+  useEffect(() => {
+    detectedSignsRef.current = detectedSigns;
+  }, [detectedSigns]);
+
+  // Initialize MediaPipe Hand Landmarker
   useEffect(() => {
     const initializeRecognizer = async () => {
       const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
       );
-      recognizerRef.current = await GestureRecognizer.createFromOptions(vision, {
+      recognizerRef.current = await HandLandmarker.createFromOptions(vision, {
         baseOptions: {
           modelAssetPath:
-            "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
+            "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
           delegate: "GPU" // Uses WebGL if available
         },
-        runningMode: "VIDEO"
+        runningMode: "VIDEO",
+        numHands: 1
       });
       setIsRecognizerReady(true);
     };
@@ -36,6 +50,60 @@ export default function WebcamSignDetector({ onSignsDetected }) {
     }
   }, []);
 
+  // Custom Math-Based ASL Alphabet Classifier
+  const classifyPoseMath = (landmarks) => {
+    const tip = { t: 4, i: 8, m: 12, r: 16, p: 20 };
+    const pip = { t: 3, i: 6, m: 10, r: 14, p: 18 };
+    const mcp = { t: 2, i: 5, m: 9, r: 13, p: 17 };
+
+    const isUp = (f) => landmarks[tip[f]].y < landmarks[pip[f]].y;
+    const tUp = landmarks[tip.t].y < landmarks[mcp.i].y;
+
+    const iUp = isUp('i');
+    const mUp = isUp('m');
+    const rUp = isUp('r');
+    const pUp = isUp('p');
+
+    // Helper to calculate 2D distance
+    const dist = (p1, p2) => Math.hypot(landmarks[p1].x - landmarks[p2].x, landmarks[p1].y - landmarks[p2].y);
+    if (iUp && mUp && rUp && pUp && tUp && dist(tip.t, mcp.i) > 0.1) return "Hello";
+    if (iUp && mUp && rUp && pUp && !tUp) {
+      if (dist(tip.t, mcp.p) < 0.12) return "B";
+      return "Stop";
+    }
+    if (iUp && mUp && !rUp && !pUp && dist(tip.i, tip.m) > 0.05) {
+      if (dist(tip.i, tip.m) < 0.08) return "V";
+      return "Peace";
+    }
+    if (!iUp && !mUp && !rUp && !pUp && landmarks[tip.t].y < landmarks[mcp.i].y - 0.05) return "Thumbs Up";
+    if (!iUp && !mUp && !rUp && !pUp && tUp) return "A";
+    if (!iUp && !mUp && !rUp && !pUp && dist(tip.i, tip.t) > 0.05 && dist(tip.i, tip.t) < 0.15) return "C";
+    if (iUp && !mUp && !rUp && !pUp && dist(tip.m, tip.t) < 0.05) return "D";
+    if (!iUp && !mUp && !rUp && !pUp && !tUp && dist(tip.i, tip.t) < 0.05) return "E";
+    if (!iUp && mUp && rUp && pUp && dist(tip.i, tip.t) < 0.05) return "F";
+    if (!iUp && !mUp && !rUp && !pUp && dist(tip.i, mcp.i) > 0.05 && dist(tip.i, tip.t) > 0.05) return "G";
+    if (!iUp && !mUp && !rUp && !pUp && dist(tip.m, mcp.i) > 0.05) return "H";
+    if (!iUp && !mUp && !rUp && pUp && !tUp) return "I";
+    if (!iUp && !mUp && !rUp && pUp && tUp) return "J";
+    if (iUp && mUp && !rUp && !pUp && tUp) return "K";
+    if (iUp && !mUp && !rUp && !pUp && tUp && dist(tip.i, tip.t) > 0.1) return "L";
+    if (!iUp && !mUp && !rUp && !pUp && !tUp && landmarks[tip.t].x > landmarks[mcp.m].x) return "M";
+    if (!iUp && !mUp && !rUp && !pUp && !tUp && landmarks[tip.t].x > landmarks[mcp.r].x) return "N";
+    if (!iUp && !mUp && !rUp && !pUp && dist(tip.i, tip.t) < 0.05 && dist(tip.m, tip.t) < 0.05) return "O";
+    // P and Q require tracking pointing downwards, skipping complex depth logic and approximating
+    if (iUp && mUp && !rUp && !pUp && dist(tip.i, tip.m) < 0.03) return "R";
+    if (!iUp && !mUp && !rUp && !pUp && !tUp && dist(tip.t, mcp.r) < 0.05) return "S";
+    if (!iUp && !mUp && !rUp && !pUp && !tUp && dist(tip.t, mcp.i) < 0.05) return "T";
+    if (iUp && mUp && !rUp && !pUp && dist(tip.i, tip.m) < 0.04) return "U";
+    // V is covered by "Peace"
+    if (iUp && mUp && rUp && !pUp) return "W";
+    if (!iUp && !mUp && !rUp && !pUp && landmarks[tip.i].y < landmarks[mcp.i].y && landmarks[tip.i].y > landmarks[pip.i].y) return "X";
+    if (!iUp && !mUp && !rUp && pUp && tUp) return "Y";
+    if (iUp && !mUp && !rUp && !pUp && tUp && dist(tip.i, tip.t) < 0.1) return "Z";
+
+    return "None";
+  };
+
   const predictWebcam = () => {
     if (!videoRef.current || !videoRef.current.srcObject || !recognizerRef.current) return;
 
@@ -43,29 +111,36 @@ export default function WebcamSignDetector({ onSignsDetected }) {
     if (videoRef.current.readyState >= 2 && videoRef.current.currentTime !== lastVideoTimeRef.current) {
       lastVideoTimeRef.current = videoRef.current.currentTime;
       const nowInMs = Date.now();
-      const results = recognizerRef.current.recognizeForVideo(videoRef.current, nowInMs);
+      const results = recognizerRef.current.detectForVideo(videoRef.current, nowInMs);
 
-      if (results.gestures.length > 0) {
-        const categoryName = results.gestures[0][0].categoryName;
-        const categoryScore = parseFloat(results.gestures[0][0].score * 100).toFixed(2);
-
-        // Map common gestures to simple words for prototype
-        const gestureMap = {
-          "Thumb_Up": "Good",
-          "Thumb_Down": "Bad",
-          "Victory": "Peace",
-          "ILoveYou": "Love",
-          "Closed_Fist": "Stop",
-          "Open_Palm": "Hello",
-          "Pointing_Up": "Look"
-        };
-
-        const word = gestureMap[categoryName] || categoryName;
+      if (results.landmarks && results.landmarks.length > 0) {
+        const landmarks = results.landmarks[0]; // Get first hand
+        const word = classifyPoseMath(landmarks);
 
         // Debounce detection (1 gesture per 1.5 seconds)
-        if (word !== "None" && categoryScore > 60 && nowInMs - lastDetectedTimeRef.current > 1500) {
-          setDetectedSigns(prev => [...prev, word]);
-          lastDetectedTimeRef.current = nowInMs;
+        if (word !== "None" && nowInMs - lastDetectedTimeRef.current > 1500) {
+          if (word === "Stop") {
+            // Trigger 3-second countdown if we have words
+            if (detectedSignsRef.current.length > 0 && !submitTimeoutRef.current) {
+              setIsSubmittingCountdown(true);
+              submitTimeoutRef.current = setTimeout(() => {
+                onSignsDetectedRef.current([...detectedSignsRef.current]);
+                setDetectedSigns([]);
+                setIsSubmittingCountdown(false);
+                submitTimeoutRef.current = null;
+              }, 3000);
+              lastDetectedTimeRef.current = nowInMs;
+            }
+          } else {
+            // Any other valid gesture cancels the stop countdown
+            if (submitTimeoutRef.current) {
+              clearTimeout(submitTimeoutRef.current);
+              submitTimeoutRef.current = null;
+              setIsSubmittingCountdown(false);
+            }
+            setDetectedSigns(prev => [...prev, word]);
+            lastDetectedTimeRef.current = nowInMs;
+          }
         }
       }
     }
@@ -150,7 +225,14 @@ export default function WebcamSignDetector({ onSignsDetected }) {
       </div>
 
       <div className="message-box">
-        <div className="message-label">Detected Signs Buffer</div>
+        <div className="message-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Detected Signs Buffer</span>
+          {isSubmittingCountdown && (
+            <span style={{ color: 'var(--accent)', fontWeight: 'bold' }}>
+              ⏳ Auto-forming in 3s...
+            </span>
+          )}
+        </div>
         {detectedSigns.length === 0 ? (
           <div style={{ color: 'var(--text-muted)' }}>No signs detected yet. Make a gesture like Thumb Up, Victory, or Open Palm.</div>
         ) : (
