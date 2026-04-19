@@ -8,17 +8,40 @@ function App() {
 
   const speakText = (text) => {
     if ('speechSynthesis' in window) {
-      // Small delay to ensure it doesn't overlap weirdly
-      setTimeout(() => {
+      let voices = window.speechSynthesis.getVoices();
+      
+      const playUtterance = () => {
         const utterance = new SpeechSynthesisUtterance(text);
-        // Using a clear voice if available
-        const voices = window.speechSynthesis.getVoices();
-        if (voices.length > 0) {
-          utterance.voice = voices.find(v => v.lang.includes('en')) || voices[0];
+        
+        // Prioritize natural sounding, premium voices
+        const premiumVoices = ['Google US English', 'Samantha', 'Karen', 'Tessa', 'Microsoft Zira'];
+        let selectedVoice = voices.find(v => premiumVoices.some(premium => v.name.includes(premium)));
+        
+        // Fallback to any English voice
+        if (!selectedVoice) {
+          selectedVoice = voices.find(v => v.lang.startsWith('en-US')) || voices.find(v => v.lang.startsWith('en')) || voices[0];
         }
-        utterance.rate = 0.9;
+
+        if (selectedVoice) {
+          utterance.voice = selectedVoice;
+        }
+        
+        utterance.rate = 0.95;  // Slightly slower for better articulation
+        utterance.pitch = 1.05; // Slightly higher pitch for a warmer, friendlier tone
+
+        window.speechSynthesis.cancel(); // Stop any currently playing audio so it doesn't queue up weirdly
         window.speechSynthesis.speak(utterance);
-      }, 100);
+      };
+
+      if (voices.length === 0) {
+        // Wait for voices to load if they aren't ready yet (common on mobile browsers)
+        window.speechSynthesis.onvoiceschanged = () => {
+          voices = window.speechSynthesis.getVoices();
+          playUtterance();
+        };
+      } else {
+        setTimeout(playUtterance, 100);
+      }
     }
   };
 
@@ -41,10 +64,6 @@ function App() {
     } finally {
       setIsProcessing(false);
     }
-  };
-
-  const handleSpeechResult = (text) => {
-    // The SpeechRecognitionComponent already displays the live text for the deaf person to read.
   };
 
   return (
@@ -70,7 +89,7 @@ function App() {
           </div>
         </div>
 
-        <SpeechRecognitionComponent onSpeechResult={handleSpeechResult} />
+        <SpeechRecognitionComponent onSpeechResult={() => {}} />
       </div>
     </div>
   );

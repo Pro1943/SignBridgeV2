@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
-import { Video, VideoOff, Send } from 'lucide-react';
+import { Video, VideoOff, Send, Trash2 } from 'lucide-react';
 
 export default function WebcamSignDetector({ onSignsDetected }) {
   const videoRef = useRef(null);
@@ -13,6 +13,7 @@ export default function WebcamSignDetector({ onSignsDetected }) {
   const lastDetectedTimeRef = useRef(0);
   const lastVideoTimeRef = useRef(-1);
   const requestRef = useRef(null);
+  const historyRef = useRef([]);
 
   const detectedSignsRef = useRef([]);
   const submitTimeoutRef = useRef(null);
@@ -52,6 +53,9 @@ export default function WebcamSignDetector({ onSignsDetected }) {
 
   // Custom Math-Based ASL Alphabet Classifier
   const classifyPoseMath = (landmarks) => {
+    // Resting Hand Filter: If wrist (0) is higher than the middle knuckle (9), hand is pointing down.
+    if (landmarks[0].y < landmarks[9].y) return "None";
+
     const tip = { t: 4, i: 8, m: 12, r: 16, p: 20 };
     const pip = { t: 3, i: 6, m: 10, r: 14, p: 18 };
     const mcp = { t: 2, i: 5, m: 9, r: 13, p: 17 };
@@ -67,10 +71,7 @@ export default function WebcamSignDetector({ onSignsDetected }) {
     // Helper to calculate 2D distance
     const dist = (p1, p2) => Math.hypot(landmarks[p1].x - landmarks[p2].x, landmarks[p1].y - landmarks[p2].y);
     if (iUp && mUp && rUp && pUp && tUp && dist(tip.t, mcp.i) > 0.1) return "Hello";
-    if (iUp && mUp && rUp && pUp && !tUp) {
-      if (dist(tip.t, mcp.p) < 0.12) return "B";
-      return "Stop";
-    }
+    if (iUp && mUp && rUp && pUp && !tUp) return "B";
     if (iUp && mUp && !rUp && !pUp && dist(tip.i, tip.m) > 0.05) {
       if (dist(tip.i, tip.m) < 0.08) return "V";
       return "Peace";
@@ -114,34 +115,60 @@ export default function WebcamSignDetector({ onSignsDetected }) {
       const results = recognizerRef.current.detectForVideo(videoRef.current, nowInMs);
 
       if (results.landmarks && results.landmarks.length > 0) {
-        const landmarks = results.landmarks[0]; // Get first hand
-        const word = classifyPoseMath(landmarks);
+        const landmarks = results.landmarks[0];
+        const rawWord = classifyPoseMath(landmarks);
 
-        // Debounce detection (1 gesture per 1.5 seconds)
-        if (word !== "None" && nowInMs - lastDetectedTimeRef.current > 1500) {
-          if (word === "Stop") {
-            // Trigger 3-second countdown if we have words
-            if (detectedSignsRef.current.length > 0 && !submitTimeoutRef.current) {
-              setIsSubmittingCountdown(true);
-              submitTimeoutRef.current = setTimeout(() => {
+        // Temporal Consistency Filter (Sliding Window)
+        historyRef.current.push(rawWord);
+        if (historyRef.current.length > 15) historyRef.current.shift();
+
+        let solidWord = "None";
+        const validWords = historyRef.current.filter(w => w !== "None");
+        
+        // Require at least 60% of the last 15 frames to be the same valid sign
+        if (validWords.length >= 9) {
+          const counts = {};
+          let maxCount = 0;
+          for (const w of validWords) {
+            counts[w] = (counts[w] || 0) + 1;
+            if (counts[w] > maxCount) {
+              maxCount = counts[w];
+              solidWord = w;
+            }
+          }
+          if (maxCount < 9) solidWord = "None";
+        }
+
+        console.log(`Raw: ${rawWord} | Solid: ${solidWord}`);
+
+        // Only trigger if we have a solidly held sign and 1.5 seconds have passed
+        if (solidWord !== "None" && nowInMs - lastDetectedTimeRef.current > 1500) {
+          if (submitTimeoutRef.current) {
+            clearTimeout(submitTimeoutRef.current);
+            submitTimeoutRef.current = null;
+          }
+          setIsSubmittingCountdown(false);
+          setDetectedSigns(prev => [...prev, solidWord]);
+          lastDetectedTimeRef.current = nowInMs;
+          
+          submitTimeoutRef.current = setTimeout(() => {
+            setIsSubmittingCountdown(true);
+            submitTimeoutRef.current = setTimeout(() => {
+              if (detectedSignsRef.current.length > 0) {
                 onSignsDetectedRef.current([...detectedSignsRef.current]);
                 setDetectedSigns([]);
-                setIsSubmittingCountdown(false);
-                submitTimeoutRef.current = null;
-              }, 3000);
-              lastDetectedTimeRef.current = nowInMs;
-            }
-          } else {
-            // Any other valid gesture cancels the stop countdown
-            if (submitTimeoutRef.current) {
-              clearTimeout(submitTimeoutRef.current);
-              submitTimeoutRef.current = null;
+              }
               setIsSubmittingCountdown(false);
-            }
-            setDetectedSigns(prev => [...prev, word]);
-            lastDetectedTimeRef.current = nowInMs;
-          }
+              submitTimeoutRef.current = null;
+              // Clear history after submit so we don't accidentally carry over a stale sign
+              historyRef.current = [];
+            }, 5000);
+          }, 3000);
         }
+      } else {
+        // If no hand is detected, we still need to record "None" in history so the sliding window decays
+        historyRef.current.push("None");
+        if (historyRef.current.length > 15) historyRef.current.shift();
       }
     }
 
@@ -185,6 +212,16 @@ export default function WebcamSignDetector({ onSignsDetected }) {
     }
   };
 
+  const handleClearBuffer = () => {
+    if (submitTimeoutRef.current) {
+      clearTimeout(submitTimeoutRef.current);
+      submitTimeoutRef.current = null;
+    }
+    setIsSubmittingCountdown(false);
+    setDetectedSigns([]);
+    historyRef.current = [];
+  };
+
   return (
     <div className="glass-panel">
       <h2 className="message-label">Deaf User (Sign to Text)</h2>
@@ -222,14 +259,23 @@ export default function WebcamSignDetector({ onSignsDetected }) {
         >
           <Send /> Form Sentence
         </button>
+
+        <button
+          className="btn"
+          style={{ background: '#dc3545', color: 'white' }}
+          onClick={handleClearBuffer}
+          disabled={detectedSigns.length === 0}
+        >
+          <Trash2 /> Clear
+        </button>
       </div>
 
       <div className="message-box">
         <div className="message-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span>Detected Signs Buffer</span>
           {isSubmittingCountdown && (
-            <span style={{ color: 'var(--accent)', fontWeight: 'bold' }}>
-              ⏳ Auto-forming in 3s...
+            <span style={{ color: 'var(--accent)', fontWeight: 'bold', animation: 'pulse 1s infinite' }}>
+              ⏳ Auto-forming in 5s...
             </span>
           )}
         </div>
