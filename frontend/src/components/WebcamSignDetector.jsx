@@ -1,294 +1,281 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
-import { Video, VideoOff, Send, Trash2 } from 'lucide-react';
 
-export default function WebcamSignDetector({ onSignsDetected }) {
-  const videoRef = useRef(null);
-  const recognizerRef = useRef(null);
-  const [isRecognizerReady, setIsRecognizerReady] = useState(false);
-  const [isWebcamActive, setIsWebcamActive] = useState(false);
-  const [detectedSigns, setDetectedSigns] = useState([]);
-  const [isSubmittingCountdown, setIsSubmittingCountdown] = useState(false);
+const ML_API_URL = import.meta.env.VITE_ML_API_URL || 'http://localhost:8000/classify';
+const CONFIDENCE_THRESHOLD = 0.75;
+const DEBOUNCE_MS = 300;
 
-  const lastDetectedTimeRef = useRef(0);
-  const lastVideoTimeRef = useRef(-1);
-  const requestRef = useRef(null);
-  const historyRef = useRef([]);
+export default function WebcamSignDetector({ onSignsDetected, onCameraChange }) {
+  const videoRef          = useRef(null);
+  const recognizerRef     = useRef(null);
+  const requestRef        = useRef(null);
+  const lastVideoTimeRef  = useRef(-1);
+  const lastFrameTimeRef  = useRef(0);
+  const isFetchingRef     = useRef(false);
+  const lastFetchTimeRef  = useRef(0);
+  const lastDetectedRef   = useRef(0);
+  const submitTORef       = useRef(null);
+  const countdownRef      = useRef(null);
+  const detectedSignsRef  = useRef([]);
+  const onDetectedRef     = useRef(onSignsDetected);
+  const loadedHandlerRef  = useRef(null);
 
-  const detectedSignsRef = useRef([]);
-  const submitTimeoutRef = useRef(null);
-  const onSignsDetectedRef = useRef(onSignsDetected);
+  const [isModelLoading, setIsModelLoading]     = useState(true);
+  const [isReady, setIsReady]                   = useState(false);
+  const [modelError, setModelError]             = useState(null);
+  const [mlApiError, setMlApiError]             = useState(null);
+  const [isWebcamActive, setIsWebcamActive]     = useState(false);
+  const [detectedSigns, setDetectedSigns]       = useState([]);
+  const [currentPrediction, setCurrentPrediction] = useState('—');
+  const [isCountdown, setIsCountdown]           = useState(false);
+  const [countdownSec, setCountdownSec]         = useState(5);
 
+  useEffect(() => { onDetectedRef.current = onSignsDetected; }, [onSignsDetected]);
+  useEffect(() => { detectedSignsRef.current = detectedSigns; }, [detectedSigns]);
+  useEffect(() => { onCameraChange?.(isWebcamActive); }, [isWebcamActive, onCameraChange]);
+
+  /* ── INIT MEDIAPIPE ── */
   useEffect(() => {
-    onSignsDetectedRef.current = onSignsDetected;
-  }, [onSignsDetected]);
+    (async () => {
+      setIsModelLoading(true);
+      try {
+        const vision = await FilesetResolver.forVisionTasks(
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.34/wasm'
+        );
+        const cfg = {
+          baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task' },
+          runningMode: 'VIDEO', numHands: 1,
+        };
+        try {
+          recognizerRef.current = await HandLandmarker.createFromOptions(vision, { ...cfg, baseOptions: { ...cfg.baseOptions, delegate: 'GPU' } });
+        } catch {
+          recognizerRef.current = await HandLandmarker.createFromOptions(vision, { ...cfg, baseOptions: { ...cfg.baseOptions, delegate: 'CPU' } });
+        }
+        setIsReady(true);
+      } catch (err) {
+        setModelError(`Failed to load AI model: ${err.message}`);
+      } finally {
+        setIsModelLoading(false);
+      }
+    })();
 
-  useEffect(() => {
-    detectedSignsRef.current = detectedSigns;
-  }, [detectedSigns]);
-
-  // Initialize MediaPipe Hand Landmarker
-  useEffect(() => {
-    const initializeRecognizer = async () => {
-      const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
-      );
-      recognizerRef.current = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-          delegate: "GPU" // Uses WebGL if available
-        },
-        runningMode: "VIDEO",
-        numHands: 1
-      });
-      setIsRecognizerReady(true);
-    };
-    initializeRecognizer();
-
+    const onUnload = () => videoRef.current?.srcObject?.getTracks().forEach(t => t.stop());
+    window.addEventListener('beforeunload', onUnload);
     return () => {
+      window.removeEventListener('beforeunload', onUnload);
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
-    }
+    };
   }, []);
 
-  // Custom Math-Based ASL Alphabet Classifier
-  const classifyPoseMath = (landmarks) => {
-    // Resting Hand Filter: If wrist (0) is higher than the middle knuckle (9), hand is pointing down.
-    if (landmarks[0].y < landmarks[9].y) return "None";
-
-    const tip = { t: 4, i: 8, m: 12, r: 16, p: 20 };
-    const pip = { t: 3, i: 6, m: 10, r: 14, p: 18 };
-    const mcp = { t: 2, i: 5, m: 9, r: 13, p: 17 };
-
-    const isUp = (f) => landmarks[tip[f]].y < landmarks[pip[f]].y;
-    const tUp = landmarks[tip.t].y < landmarks[mcp.i].y;
-
-    const iUp = isUp('i');
-    const mUp = isUp('m');
-    const rUp = isUp('r');
-    const pUp = isUp('p');
-
-    // Helper to calculate 2D distance
-    const dist = (p1, p2) => Math.hypot(landmarks[p1].x - landmarks[p2].x, landmarks[p1].y - landmarks[p2].y);
-    if (iUp && mUp && rUp && pUp && tUp && dist(tip.t, mcp.i) > 0.1) return "Hello";
-    if (iUp && mUp && rUp && pUp && !tUp) return "B";
-    if (iUp && mUp && !rUp && !pUp && dist(tip.i, tip.m) > 0.05) {
-      if (dist(tip.i, tip.m) < 0.08) return "V";
-      return "Peace";
-    }
-    if (!iUp && !mUp && !rUp && !pUp && landmarks[tip.t].y < landmarks[mcp.i].y - 0.05) return "Thumbs Up";
-    if (!iUp && !mUp && !rUp && !pUp && tUp) return "A";
-    if (!iUp && !mUp && !rUp && !pUp && dist(tip.i, tip.t) > 0.05 && dist(tip.i, tip.t) < 0.15) return "C";
-    if (iUp && !mUp && !rUp && !pUp && dist(tip.m, tip.t) < 0.05) return "D";
-    if (!iUp && !mUp && !rUp && !pUp && !tUp && dist(tip.i, tip.t) < 0.05) return "E";
-    if (!iUp && mUp && rUp && pUp && dist(tip.i, tip.t) < 0.05) return "F";
-    if (!iUp && !mUp && !rUp && !pUp && dist(tip.i, mcp.i) > 0.05 && dist(tip.i, tip.t) > 0.05) return "G";
-    if (!iUp && !mUp && !rUp && !pUp && dist(tip.m, mcp.i) > 0.05) return "H";
-    if (!iUp && !mUp && !rUp && pUp && !tUp) return "I";
-    if (!iUp && !mUp && !rUp && pUp && tUp) return "J";
-    if (iUp && mUp && !rUp && !pUp && tUp) return "K";
-    if (iUp && !mUp && !rUp && !pUp && tUp && dist(tip.i, tip.t) > 0.1) return "L";
-    if (!iUp && !mUp && !rUp && !pUp && !tUp && landmarks[tip.t].x > landmarks[mcp.m].x) return "M";
-    if (!iUp && !mUp && !rUp && !pUp && !tUp && landmarks[tip.t].x > landmarks[mcp.r].x) return "N";
-    if (!iUp && !mUp && !rUp && !pUp && dist(tip.i, tip.t) < 0.05 && dist(tip.m, tip.t) < 0.05) return "O";
-    // P and Q require tracking pointing downwards, skipping complex depth logic and approximating
-    if (iUp && mUp && !rUp && !pUp && dist(tip.i, tip.m) < 0.03) return "R";
-    if (!iUp && !mUp && !rUp && !pUp && !tUp && dist(tip.t, mcp.r) < 0.05) return "S";
-    if (!iUp && !mUp && !rUp && !pUp && !tUp && dist(tip.t, mcp.i) < 0.05) return "T";
-    if (iUp && mUp && !rUp && !pUp && dist(tip.i, tip.m) < 0.04) return "U";
-    // V is covered by "Peace"
-    if (iUp && mUp && rUp && !pUp) return "W";
-    if (!iUp && !mUp && !rUp && !pUp && landmarks[tip.i].y < landmarks[mcp.i].y && landmarks[tip.i].y > landmarks[pip.i].y) return "X";
-    if (!iUp && !mUp && !rUp && pUp && tUp) return "Y";
-    if (iUp && !mUp && !rUp && !pUp && tUp && dist(tip.i, tip.t) < 0.1) return "Z";
-
-    return "None";
-  };
-
-  const predictWebcam = () => {
-    if (!videoRef.current || !videoRef.current.srcObject || !recognizerRef.current) return;
-
-    // Check if the video is ready and time advanced
-    if (videoRef.current.readyState >= 2 && videoRef.current.currentTime !== lastVideoTimeRef.current) {
-      lastVideoTimeRef.current = videoRef.current.currentTime;
-      const nowInMs = Date.now();
-      const results = recognizerRef.current.detectForVideo(videoRef.current, nowInMs);
-
-      if (results.landmarks && results.landmarks.length > 0) {
-        const landmarks = results.landmarks[0];
-        const rawWord = classifyPoseMath(landmarks);
-
-        // Temporal Consistency Filter (Sliding Window)
-        historyRef.current.push(rawWord);
-        if (historyRef.current.length > 15) historyRef.current.shift();
-
-        let solidWord = "None";
-        const validWords = historyRef.current.filter(w => w !== "None");
-        
-        // Require at least 60% of the last 15 frames to be the same valid sign
-        if (validWords.length >= 9) {
-          const counts = {};
-          let maxCount = 0;
-          for (const w of validWords) {
-            counts[w] = (counts[w] || 0) + 1;
-            if (counts[w] > maxCount) {
-              maxCount = counts[w];
-              solidWord = w;
-            }
-          }
-          if (maxCount < 9) solidWord = "None";
-        }
-
-        console.log(`Raw: ${rawWord} | Solid: ${solidWord}`);
-
-        // Only trigger if we have a solidly held sign and 1.5 seconds have passed
-        if (solidWord !== "None" && nowInMs - lastDetectedTimeRef.current > 1500) {
-          if (submitTimeoutRef.current) {
-            clearTimeout(submitTimeoutRef.current);
-            submitTimeoutRef.current = null;
-          }
-          setIsSubmittingCountdown(false);
-          setDetectedSigns(prev => [...prev, solidWord]);
-          lastDetectedTimeRef.current = nowInMs;
-          
-          submitTimeoutRef.current = setTimeout(() => {
-            setIsSubmittingCountdown(true);
-            submitTimeoutRef.current = setTimeout(() => {
-              if (detectedSignsRef.current.length > 0) {
-                onSignsDetectedRef.current([...detectedSignsRef.current]);
-                setDetectedSigns([]);
-              }
-              setIsSubmittingCountdown(false);
-              submitTimeoutRef.current = null;
-              // Clear history after submit so we don't accidentally carry over a stale sign
-              historyRef.current = [];
-            }, 5000);
-          }, 3000);
+  /* ── ML API ── */
+  const fetchPrediction = async (landmarks) => {
+    const now = Date.now();
+    if (isFetchingRef.current || now - lastFetchTimeRef.current < DEBOUNCE_MS) return;
+    isFetchingRef.current = true;
+    lastFetchTimeRef.current = now;
+    try {
+      const clean = landmarks.map(({ x, y, z }) => ({ x, y, z }));
+      const res = await fetch(ML_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ landmarks: clean }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (typeof data.confidence === 'number' && data.confidence >= CONFIDENCE_THRESHOLD) {
+          setMlApiError(null);
+          handlePrediction(data.sign, data.confidence);
         }
       } else {
-        // If no hand is detected, we still need to record "None" in history so the sliding window decays
-        historyRef.current.push("None");
-        if (historyRef.current.length > 15) historyRef.current.shift();
+        setMlApiError(`ML API: server returned ${res.status}`);
       }
-    }
-
-    // Keep predicting
-    if (videoRef.current && videoRef.current.srcObject) {
-      requestRef.current = window.requestAnimationFrame(predictWebcam);
+    } catch {
+      setMlApiError('ML API unreachable — check classifier server.');
+    } finally {
+      isFetchingRef.current = false;
     }
   };
 
-  const enableCam = async () => {
-    if (!recognizerRef.current) return;
+  /* ── PREDICTION HANDLER ── */
+  const handlePrediction = (sign, confidence) => {
+    setCurrentPrediction(`${sign.toUpperCase()} · ${Math.round(confidence * 100)}%`);
+    if (sign === 'None' || !sign || Date.now() - lastDetectedRef.current < 800) return;
 
+    clearTimeout(submitTORef.current);
+    clearInterval(countdownRef.current);
+    setIsCountdown(false);
+    setCountdownSec(5);
+    setDetectedSigns(prev => [...prev, sign]);
+    lastDetectedRef.current = Date.now();
+
+    submitTORef.current = setTimeout(() => {
+      setIsCountdown(true);
+      let rem = 5;
+      countdownRef.current = setInterval(() => {
+        rem -= 1;
+        setCountdownSec(rem);
+        if (rem <= 0) {
+          clearInterval(countdownRef.current);
+          if (detectedSignsRef.current.length > 0) {
+            onDetectedRef.current([...detectedSignsRef.current]);
+            setDetectedSigns([]);
+          }
+          setIsCountdown(false);
+          setCountdownSec(5);
+        }
+      }, 1000);
+    }, 3000);
+  };
+
+  /* ── FRAME LOOP ── */
+  const predictWebcam = () => {
+    if (!videoRef.current?.srcObject || !recognizerRef.current) return;
+    const now = performance.now();
+    if (now - lastFrameTimeRef.current < 66) { requestRef.current = requestAnimationFrame(predictWebcam); return; }
+    lastFrameTimeRef.current = now;
+
+    if (videoRef.current.readyState >= 2 && videoRef.current.currentTime !== lastVideoTimeRef.current) {
+      lastVideoTimeRef.current = videoRef.current.currentTime;
+      const results = recognizerRef.current.detectForVideo(videoRef.current, Date.now());
+      if (results.landmarks?.length > 0) fetchPrediction(results.landmarks[0]);
+      else setCurrentPrediction('—');
+    }
+    if (videoRef.current?.srcObject) requestRef.current = requestAnimationFrame(predictWebcam);
+  };
+
+  /* ── CAMERA TOGGLE ── */
+  const toggleCamera = async () => {
     if (isWebcamActive) {
-      const stream = videoRef.current.srcObject;
-      if (stream) {
-        const tracks = stream.getTracks();
-        tracks.forEach((track) => track.stop());
-      }
-      videoRef.current.srcObject = null;
+      videoRef.current?.srcObject?.getTracks().forEach(t => t.stop());
+      if (videoRef.current) videoRef.current.srcObject = null;
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      if (loadedHandlerRef.current && videoRef.current)
+        videoRef.current.removeEventListener('loadeddata', loadedHandlerRef.current);
       setIsWebcamActive(false);
+      setCurrentPrediction('—');
       return;
     }
-
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480 }
-      });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
       videoRef.current.srcObject = stream;
-      videoRef.current.addEventListener("loadeddata", predictWebcam);
+      loadedHandlerRef.current = predictWebcam;
+      videoRef.current.addEventListener('loadeddata', predictWebcam, { once: true });
       setIsWebcamActive(true);
-    } catch (err) {
-      console.error("Error accessing webcam:", err);
+    } catch {
+      setModelError('Camera access denied. Allow camera permissions and retry.');
     }
   };
 
-  const handleSendToAI = () => {
-    if (detectedSigns.length > 0) {
-      onSignsDetected(detectedSigns);
-      setDetectedSigns([]); // Clear after sending
-    }
-  };
-
-  const handleClearBuffer = () => {
-    if (submitTimeoutRef.current) {
-      clearTimeout(submitTimeoutRef.current);
-      submitTimeoutRef.current = null;
-    }
-    setIsSubmittingCountdown(false);
+  /* ── CONTROLS ── */
+  const sendToAI = () => {
+    if (!detectedSigns.length) return;
+    clearTimeout(submitTORef.current);
+    clearInterval(countdownRef.current);
+    setIsCountdown(false);
+    onSignsDetected([...detectedSigns]);
     setDetectedSigns([]);
-    historyRef.current = [];
+  };
+  const undoLast = () => setDetectedSigns(p => p.slice(0, -1));
+  const clearAll = () => {
+    clearTimeout(submitTORef.current);
+    clearInterval(countdownRef.current);
+    setIsCountdown(false);
+    setCountdownSec(5);
+    setDetectedSigns([]);
+    lastDetectedRef.current = 0;
   };
 
+  /* ── RENDER ── */
   return (
-    <div className="glass-panel">
-      <h2 className="message-label">Deaf User (Sign to Text)</h2>
-
-      <div className="video-container">
-        <video
-          ref={videoRef}
-          className="video-element"
-          autoPlay
-          playsInline
-        ></video>
-        {!isWebcamActive && (
-          <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: '#fff', textAlign: 'center' }}>
-            <VideoOff size={48} style={{ marginBottom: '1rem', opacity: 0.5 }} />
-            <p>Camera is disabled</p>
-          </div>
-        )}
-      </div>
-
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
-        <button
-          className={`btn ${isWebcamActive ? 'active' : ''}`}
-          onClick={enableCam}
-          disabled={!isRecognizerReady}
-        >
-          {isWebcamActive ? <VideoOff /> : <Video />}
-          {isWebcamActive ? 'Stop Camera' : 'Start Camera'}
-        </button>
-
-        <button
-          className="btn"
-          style={{ background: 'var(--success)' }}
-          onClick={handleSendToAI}
-          disabled={detectedSigns.length === 0}
-        >
-          <Send /> Form Sentence
-        </button>
-
-        <button
-          className="btn"
-          style={{ background: '#dc3545', color: 'white' }}
-          onClick={handleClearBuffer}
-          disabled={detectedSigns.length === 0}
-        >
-          <Trash2 /> Clear
-        </button>
-      </div>
-
-      <div className="message-box">
-        <div className="message-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>Detected Signs Buffer</span>
-          {isSubmittingCountdown && (
-            <span style={{ color: 'var(--accent)', fontWeight: 'bold', animation: 'pulse 1s infinite' }}>
-              ⏳ Auto-forming in 5s...
-            </span>
-          )}
+    <>
+      {/* Banners */}
+      {isModelLoading && (
+        <div className="banner banner-amber" role="status">
+          <div className="spinner-xs" />
+          Loading AI model (~7.8 MB)…
         </div>
-        {detectedSigns.length === 0 ? (
-          <div style={{ color: 'var(--text-muted)' }}>No signs detected yet. Make a gesture like Thumb Up, Victory, or Open Palm.</div>
-        ) : (
-          <div className="detected-signs">
-            {detectedSigns.map((sign, index) => (
-              <span key={index} className="sign-badge">{sign}</span>
-            ))}
+      )}
+      {modelError && (
+        <div className="banner banner-danger" role="alert">⚠ {modelError}</div>
+      )}
+      {mlApiError && !modelError && (
+        <div className="banner banner-warn" role="alert">⚠ {mlApiError}</div>
+      )}
+
+      {/* Video */}
+      <div className="video-wrapper">
+        <video ref={videoRef} className="video-feed" autoPlay playsInline
+          aria-label="Webcam feed for sign language detection" />
+
+        {/* Corner brackets */}
+        <div className="bracket bracket-tl" aria-hidden="true" />
+        <div className="bracket bracket-tr" aria-hidden="true" />
+        <div className="bracket bracket-bl" aria-hidden="true" />
+        <div className="bracket bracket-br" aria-hidden="true" />
+
+        {/* Prediction pill */}
+        {isWebcamActive && (
+          <div className="prediction-pill" aria-live="polite">
+            <span className="pred-label">AI</span>
+            <span className="pred-value">{currentPrediction}</span>
+          </div>
+        )}
+
+        {/* Camera-off placeholder */}
+        {!isWebcamActive && (
+          <div className="camera-off">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636" />
+              <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <p>Camera disabled</p>
           </div>
         )}
       </div>
-    </div>
+
+      {/* Sign chip tape */}
+      <div className="sign-tape" aria-label="Detected signs buffer">
+        <span className="tape-label">Buffer</span>
+        {detectedSigns.length === 0 ? (
+          <span className="tape-empty">No signs detected — make a gesture</span>
+        ) : (
+          detectedSigns.map((s, i) => (
+            <span key={i} className="sign-chip">{s}</span>
+          ))
+        )}
+        {isCountdown && (
+          <span className="countdown-chip" aria-live="assertive">
+            ⏳ {countdownSec}s
+          </span>
+        )}
+      </div>
+
+      {/* Controls */}
+      <div className="controls-bar">
+        <button className={`btn ${isWebcamActive ? 'btn-danger' : 'btn-amber'}`}
+          onClick={toggleCamera} disabled={!isReady}
+          aria-label={isWebcamActive ? 'Stop camera' : 'Start camera'}>
+          {isWebcamActive ? '◼ Stop' : '▶ Start Camera'}
+        </button>
+
+        <button className="btn btn-outline" onClick={sendToAI}
+          disabled={!detectedSigns.length}
+          aria-label="Send signs to AI for sentence formation">
+          ↑ Form Sentence
+        </button>
+
+        <button className="btn btn-outline" onClick={undoLast}
+          disabled={!detectedSigns.length}
+          aria-label="Remove last sign">
+          ← Undo
+        </button>
+
+        <button className="btn btn-outline" onClick={clearAll}
+          disabled={!detectedSigns.length}
+          aria-label="Clear all signs">
+          ✕ Clear
+        </button>
+      </div>
+    </>
   );
 }

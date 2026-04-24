@@ -1,103 +1,122 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff } from 'lucide-react';
 
 export default function SpeechRecognitionComponent({ onSpeechResult }) {
-  const [isListening, setIsListening] = useState(false);
-  const [transcript, setTranscript] = useState('');
-  const recognitionRef = useRef(null);
+  const [isListening, setIsListening]   = useState(false);
+  const [finalText, setFinalText]       = useState('');
+  const [interimText, setInterimText]   = useState('');
+  const recognitionRef   = useRef(null);
+  const isListeningRef   = useRef(false);
+  const onResultRef      = useRef(onSpeechResult);
+  const transcriptRef    = useRef(null);
 
+  useEffect(() => { onResultRef.current = onSpeechResult; }, [onSpeechResult]);
+  useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
+
+  /* ── INIT SPEECH RECOGNITION ── */
   useEffect(() => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      console.warn("Speech Recognition API not supported in this browser.");
-      return;
-    }
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return;
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.continuous = true;
-    recognitionRef.current.interimResults = true;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    recognitionRef.current = rec;
 
-    recognitionRef.current.onresult = (event) => {
-      let finalTranscript = '';
-      let interimTranscript = '';
-
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          finalTranscript += event.results[i][0].transcript;
-        } else {
-          interimTranscript += event.results[i][0].transcript;
-        }
+    rec.onresult = (e) => {
+      let fin = '', int = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) fin += e.results[i][0].transcript;
+        else int = e.results[i][0].transcript;
       }
-
-      setTranscript(prev => finalTranscript ? prev + ' ' + finalTranscript : prev + interimTranscript);
-      
-      if (finalTranscript) {
-        onSpeechResult(finalTranscript.trim());
+      if (fin) {
+        setFinalText(p => p + ' ' + fin);
+        setInterimText('');
+        onResultRef.current(fin.trim());
+      } else {
+        setInterimText(int);
       }
     };
 
-    recognitionRef.current.onerror = (event) => {
-      console.error("Speech recognition error:", event.error);
-      if (event.error === 'not-allowed') {
-        alert("Microphone access blocked! Please click the small camera/mic icon in your browser's address bar to allow microphone access, then try again.");
-      }
-      setIsListening(false);
-    };
-
-    recognitionRef.current.onend = () => {
-      if (isListening) {
-        // Automatically restart if it stops unexpectedly while supposed to be listening
-        try {
-          recognitionRef.current.start();
-        } catch(e) {}
+    rec.onerror = (e) => {
+      if (e.error === 'not-allowed') {
+        alert('Microphone blocked — allow access in browser settings.');
+        setIsListening(false);
+      } else if (e.error === 'no-speech') {
+        setInterimText('… (no speech detected)');
+      } else {
+        setIsListening(false);
       }
     };
 
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
+    rec.onend = () => {
+      if (isListeningRef.current) {
+        try { rec.start(); } catch { /* already started */ }
       }
     };
-  }, [isListening, onSpeechResult]);
 
-  const toggleListening = () => {
+    return () => { try { rec.abort(); } catch { /* cleanup */ } };
+  }, []);
+
+  /* Auto-scroll */
+  useEffect(() => {
+    if (transcriptRef.current)
+      transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+  }, [finalText, interimText]);
+
+  const toggle = () => {
+    if (!recognitionRef.current) return;
     if (isListening) {
-      recognitionRef.current.stop();
+      try { recognitionRef.current.abort(); } catch { /* ok */ }
       setIsListening(false);
     } else {
-      setTranscript('');
-      try {
-        recognitionRef.current.start();
-        setIsListening(true);
-      } catch (err) {
-        console.error("Failed to start listening", err);
-      }
+      setFinalText('');
+      setInterimText('');
+      try { recognitionRef.current.start(); setIsListening(true); } catch { /* ok */ }
     }
   };
 
-  return (
-    <div className="glass-panel">
-      <h2 className="message-label" style={{ color: 'var(--success)' }}>Hearing User (Speech to Text)</h2>
-      
-      <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
-        <button 
-          className={`btn ${isListening ? 'recording' : ''}`} 
-          onClick={toggleListening}
-          style={{ marginBottom: '1.5rem', width: 'auto', alignSelf: 'flex-start' }}
-        >
-          {isListening ? <MicOff /> : <Mic />}
-          {isListening ? 'Stop Listening' : 'Start Listening'}
-        </button>
+  const display = (finalText + (interimText ? ' ' + interimText : '')).trim();
 
-        <div className="message-box" style={{ flexGrow: 1 }}>
-          <div className="message-label">Live Transcript</div>
-          {transcript ? (
-            <div className="large-text">{transcript}</div>
-          ) : (
-            <div style={{ color: 'var(--text-muted)' }}>Waiting for speech... Press the mic and start talking.</div>
-          )}
-        </div>
+  return (
+    <>
+      {/* Transcript */}
+      <div className="speech-body" ref={transcriptRef}
+        aria-live="polite" aria-label="Speech transcript">
+        {display ? (
+          <div className="speech-live">
+            {finalText.trim()}
+            {interimText && <span className="interim"> {interimText}</span>}
+          </div>
+        ) : (
+          <p className="speech-empty">
+            {isListening
+              ? '// Listening… speak now'
+              : '// Press listen to capture speech'}
+          </p>
+        )}
       </div>
-    </div>
+
+      {/* Controls */}
+      <div className="speech-controls">
+        <button
+          className={`btn ${isListening ? 'btn-danger' : 'btn-success'}`}
+          onClick={toggle}
+          aria-label={isListening ? 'Stop listening' : 'Start listening'}
+        >
+          {isListening ? '◼ Stop' : '⏺ Listen'}
+        </button>
+        {isListening && (
+          <span style={{
+            fontFamily: "'DM Mono', monospace",
+            fontSize: '0.65rem',
+            letterSpacing: '0.1em',
+            color: 'var(--success)',
+            animation: 'blink 1.5s ease-in-out infinite',
+          }}>
+            REC
+          </span>
+        )}
+      </div>
+    </>
   );
 }
