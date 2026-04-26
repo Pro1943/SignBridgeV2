@@ -277,8 +277,8 @@ cp .env.example .env
 
 ```env
 # frontend/.env
-VITE_BACKEND_URL=https://backend-snowy-sigma-85.vercel.app/api/signbridge
-VITE_ML_API_URL=http://localhost:8000/classify
+VITE_BACKEND_URL={your_backend_url}
+VITE_ML_API_URL={your_ml_api_url}
 ```
 
 ### 3. Run Development Server
