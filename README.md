@@ -238,7 +238,7 @@ flowchart LR
     D --> E["⚖️ Normalization and Centering"]
     E --> F["✂️ Train/Test Split — 80/20"]
     F --> G["🌲 Random Forest Training — 100 Trees"]
-    G --> H["💾 sign_classifier.pkl — 11.3 MB"]
+    G --> H["💾 sign_classifier.pkl — 31.7 MB"]
     H --> I["🚀 FastAPI Inference Server"]
 ```
 
@@ -383,12 +383,12 @@ The Random Forest classifier (100 estimators) achieves the following metrics on 
 
 | Metric | Score |
 |:-------|:-----:|
-| **Overall Accuracy** | 93% |
-| **Macro Avg Precision** | 0.91 |
-| **Macro Avg Recall** | 0.89 |
-| **Macro Avg F1-Score** | 0.89 |
+| **Overall Accuracy** | 99.9% |
+| **Macro Avg Precision** | 0.99 |
+| **Macro Avg Recall** | 0.97 |
+| **Macro Avg F1-Score** | 0.98 |
 | **Classes Supported** | A–Z (including J, Z but less accurate) + 0–9 |
-| **Model Size** | 11.3 MB |
+| **Model Size** | 31.7 MB |
 | **Inference Latency** | < 50ms |
 
 </div>
