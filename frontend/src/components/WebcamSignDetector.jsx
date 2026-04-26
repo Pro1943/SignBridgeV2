@@ -6,29 +6,29 @@ const CONFIDENCE_THRESHOLD = 0.75;
 const DEBOUNCE_MS = 300;
 
 export default function WebcamSignDetector({ onSignsDetected, onCameraChange }) {
-  const videoRef          = useRef(null);
-  const recognizerRef     = useRef(null);
-  const requestRef        = useRef(null);
-  const lastVideoTimeRef  = useRef(-1);
-  const lastFrameTimeRef  = useRef(0);
-  const isFetchingRef     = useRef(false);
-  const lastFetchTimeRef  = useRef(0);
-  const lastDetectedRef   = useRef(0);
-  const submitTORef       = useRef(null);
-  const countdownRef      = useRef(null);
-  const detectedSignsRef  = useRef([]);
-  const onDetectedRef     = useRef(onSignsDetected);
-  const loadedHandlerRef  = useRef(null);
+  const videoRef = useRef(null);
+  const recognizerRef = useRef(null);
+  const requestRef = useRef(null);
+  const lastVideoTimeRef = useRef(-1);
+  const lastFrameTimeRef = useRef(0);
+  const isFetchingRef = useRef(false);
+  const lastFetchTimeRef = useRef(0);
+  const lastDetectedRef = useRef(0);
+  const submitTORef = useRef(null);
+  const countdownRef = useRef(null);
+  const detectedSignsRef = useRef([]);
+  const onDetectedRef = useRef(onSignsDetected);
+  const loadedHandlerRef = useRef(null);
 
-  const [isModelLoading, setIsModelLoading]     = useState(true);
-  const [isReady, setIsReady]                   = useState(false);
-  const [modelError, setModelError]             = useState(null);
-  const [mlApiError, setMlApiError]             = useState(null);
-  const [isWebcamActive, setIsWebcamActive]     = useState(false);
-  const [detectedSigns, setDetectedSigns]       = useState([]);
+  const [isModelLoading, setIsModelLoading] = useState(true);
+  const [isReady, setIsReady] = useState(false);
+  const [modelError, setModelError] = useState(null);
+  const [mlApiError, setMlApiError] = useState(null);
+  const [isWebcamActive, setIsWebcamActive] = useState(false);
+  const [detectedSigns, setDetectedSigns] = useState([]);
   const [currentPrediction, setCurrentPrediction] = useState('—');
-  const [isCountdown, setIsCountdown]           = useState(false);
-  const [countdownSec, setCountdownSec]         = useState(5);
+  const [isCountdown, setIsCountdown] = useState(false);
+  const [countdownSec, setCountdownSec] = useState(5);
 
   useEffect(() => { onDetectedRef.current = onSignsDetected; }, [onSignsDetected]);
   useEffect(() => { detectedSignsRef.current = detectedSigns; }, [detectedSigns]);
@@ -82,9 +82,13 @@ export default function WebcamSignDetector({ onSignsDetected, onCameraChange }) 
       });
       if (res.ok) {
         const data = await res.json();
-        if (typeof data.confidence === 'number' && data.confidence >= CONFIDENCE_THRESHOLD) {
+        if (typeof data.confidence === 'number') {
           setMlApiError(null);
-          handlePrediction(data.sign, data.confidence);
+          setCurrentPrediction(`${String(data.sign).toUpperCase()} · ${Math.round(data.confidence * 100)}%`);
+
+          if (data.confidence >= CONFIDENCE_THRESHOLD) {
+            handlePrediction(data.sign, data.confidence);
+          }
         }
       } else {
         setMlApiError(`ML API: server returned ${res.status}`);

@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 export default function SpeechRecognitionComponent({ onSpeechResult }) {
-  const [isListening, setIsListening]   = useState(false);
-  const [finalText, setFinalText]       = useState('');
-  const [interimText, setInterimText]   = useState('');
-  const recognitionRef   = useRef(null);
-  const isListeningRef   = useRef(false);
-  const onResultRef      = useRef(onSpeechResult);
-  const transcriptRef    = useRef(null);
+  const [isListening, setIsListening] = useState(false);
+  const [finalText, setFinalText] = useState('');
+  const [interimText, setInterimText] = useState('');
+  const recognitionRef = useRef(null);
+  const isListeningRef = useRef(false);
+  const onResultRef = useRef(onSpeechResult);
+  const transcriptRef = useRef(null);
 
   useEffect(() => { onResultRef.current = onSpeechResult; }, [onSpeechResult]);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
@@ -91,7 +91,7 @@ export default function SpeechRecognitionComponent({ onSpeechResult }) {
           <p className="speech-empty">
             {isListening
               ? '// Listening… speak now'
-              : '// Press listen to capture speech'}
+              : '// Press speak to capture speech'}
           </p>
         )}
       </div>
@@ -101,9 +101,9 @@ export default function SpeechRecognitionComponent({ onSpeechResult }) {
         <button
           className={`btn ${isListening ? 'btn-danger' : 'btn-success'}`}
           onClick={toggle}
-          aria-label={isListening ? 'Stop listening' : 'Start listening'}
+          aria-label={isListening ? 'Stop speaking' : 'Start speaking'}
         >
-          {isListening ? '◼ Stop' : '⏺ Listen'}
+          {isListening ? '◼ Stop' : '⏺ Speak'}
         </button>
         {isListening && (
           <span style={{
