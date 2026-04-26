@@ -331,8 +331,7 @@ SignBridgeV2/
 │   └── .env                         # Environment variables (gitignored)
 │
 ├── LICENSE                          # MIT License
-├── README.md                        # You are here
-└── report.md                        # Comprehensive codebase audit (58 findings)
+└── README.md                        # You are here
 ```
 
 > **Companion Repository:** The ML classification API lives at [**Pro1943/Ml-API**](https://github.com/Pro1943/Ml-API) — a standalone FastAPI service with training pipeline, model artifacts, and inference endpoints.
@@ -388,7 +387,7 @@ The Random Forest classifier (100 estimators) achieves the following metrics on 
 | **Macro Avg Precision** | 0.91 |
 | **Macro Avg Recall** | 0.89 |
 | **Macro Avg F1-Score** | 0.89 |
-| **Classes Supported** | A–Z (excluding J, Z) + 0–9 |
+| **Classes Supported** | A–Z (including J, Z but less accurate) + 0–9 |
 | **Model Size** | 11.3 MB |
 | **Inference Latency** | < 50ms |
 
