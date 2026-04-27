@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
 const ML_API_URL = import.meta.env.VITE_ML_API_URL || 'http://localhost:8000/classify';
-const CONFIDENCE_THRESHOLD = 0.75;
+const CONFIDENCE_THRESHOLD = 0.47;
 const DEBOUNCE_MS = 300;
 
 export default function WebcamSignDetector({ onSignsDetected, onCameraChange }) {
