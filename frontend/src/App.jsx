@@ -10,12 +10,14 @@ const sanitizeSign = (sign) => {
 };
 
 export default function App() {
-  const [aiResponse, setAiResponse]           = useState('');
-  const [isProcessing, setIsProcessing]       = useState(false);
-  const [conversationHistory, setHistory]     = useState([]);
-  const [isWebcamLive, setIsWebcamLive]       = useState(false);
-  const lastApiCallRef  = useRef(0);
+  const [aiResponse, setAiResponse] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [conversationHistory, setHistory] = useState([]);
+  const [isWebcamLive, setIsWebcamLive] = useState(false);
+  const lastApiCallRef = useRef(0);
   const voicesLoadedRef = useRef(false);
+  const historyRef = useRef([]);
+  React.useEffect(() => { historyRef.current = conversationHistory; }, [conversationHistory]);
 
   /* ── TTS ── */
   const speakText = (text) => {
@@ -23,10 +25,10 @@ export default function App() {
     let voices = window.speechSynthesis.getVoices();
     const play = () => {
       const utt = new SpeechSynthesisUtterance(text);
-      const preferred = ['Google US English','Samantha','Karen','Tessa','Microsoft Zira'];
+      const preferred = ['Google US English', 'Samantha', 'Karen', 'Tessa', 'Microsoft Zira'];
       let v = voices.find(v => preferred.some(p => v.name.includes(p)))
-            || voices.find(v => v.lang.startsWith('en-US'))
-            || voices[0];
+        || voices.find(v => v.lang.startsWith('en-US'))
+        || voices[0];
       if (v) utt.voice = v;
       utt.rate = 0.95; utt.pitch = 1.05;
       window.speechSynthesis.cancel();
@@ -49,19 +51,30 @@ export default function App() {
     if (now - lastApiCallRef.current < 3000) return;
     lastApiCallRef.current = now;
 
-    const deduped = signs.map(sanitizeSign).filter(Boolean)
-      .reduce((acc, s) => (acc.at(-1) !== s ? [...acc, s] : acc), []);
-    if (!deduped.length) return;
+    // Sanitize letters — preserve ALL consecutive letters (double letters in
+    // words like HELLO, BOOK, COFFEE must NOT be deduped).
+    const letters = signs.map(sanitizeSign).filter(Boolean);
+    if (!letters.length) return;
 
     setIsProcessing(true);
     setAiResponse('');
+
+    // Build conversational context from the last 2 AI-formed sentences.
+    // The LLM sees its own prior output as 'assistant' messages so it can
+    // resolve context across turns:
+    //   assistant: "My name is:"  ← prior turn
+    //   user: [a, b, i, r]        ← current letters → AI says "Abir"
+    const recentHistory = historyRef.current
+      .filter(e => e.type === 'sign' && e.sentence)
+      .slice(-2)
+      .map(e => ({ role: 'assistant', content: e.sentence }));
 
     const attempt = async (retry = 0) => {
       try {
         const res = await fetch(BACKEND_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ words: deduped }),
+          body: JSON.stringify({ words: letters, history: recentHistory }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -69,7 +82,7 @@ export default function App() {
         if (data.sentence?.trim()) {
           setAiResponse(data.sentence);
           speakText(data.sentence);
-          setHistory(prev => [...prev, { type: 'sign', signs: deduped, sentence: data.sentence, ts: Date.now() }]);
+          setHistory(prev => [...prev, { type: 'sign', signs: letters, sentence: data.sentence, ts: Date.now() }]);
         } else {
           setAiResponse('Error: empty AI response.');
         }
