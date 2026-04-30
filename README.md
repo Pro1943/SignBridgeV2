@@ -487,31 +487,6 @@ Contributions are welcome! This is a solo project, but community input is valued
 
 Distributed under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
 
----
-
-## 🏆 Built for the ASI:One AI Hackathon
-
-<div align="center">
-
-  <br/>
-
-  <img src="https://img.shields.io/badge/🏆_Built_for-ASI%3AOne_AI_Hackathon-FFD700?style=for-the-badge" alt="Built for ASI:One AI Hackathon" />
-
-  <br/><br/>
-
-  <p>
-    <strong>SignBridge V2</strong> was proudly built for the <strong>ASI:One AI Hackathon</strong> —<br/>
-    pushing the boundaries of AI-powered accessibility and inclusive communication.
-  </p>
-
-  <p>
-    The mission: prove that a single developer, armed with modern AI tools,<br/>
-    can build a production-grade accessibility platform in hackathon time.
-  </p>
-
-  <br/>
-
-</div>
 
 ---
 
